@@ -2,6 +2,7 @@ from collections import defaultdict
 
 import networkx as nx
 import numpy as np
+import plotly.graph_objects as go
 
 # Optional imports
 try:
@@ -20,7 +21,13 @@ except ImportError:
 # =====================================================
 
 
-def computeLandmarks(X, eps, method="ballTree", metric="minkowski"):
+def computeLandmarks(
+    X: np.ndarray,
+    eps: float,
+    method: Literal["ballTree", "faiss"] = "ballTree",
+    metric: str = "euclidean",
+    leafSize: int = 40,
+) -> Tuple[List[int], List[np.ndarray]]:
     """
     Compute landmarks and their coverage sets from data points.
 
@@ -49,7 +56,7 @@ def computeLandmarks(X, eps, method="ballTree", metric="minkowski"):
     ValueError
         If `method` is not one of {"ballTree", "faiss"}.
     ImportError
-        If required library (scikit-learn or faiss) is not installed.
+        If required libaissrary (scikit-learn or faiss) is not installed.
 
     Example
     -------
@@ -59,16 +66,16 @@ def computeLandmarks(X, eps, method="ballTree", metric="minkowski"):
     method = method.lower()
 
     if method == "balltree" or method == "ballTree".lower():
-        return _computeLandmarksBallTree(X, eps, metric)
+        return _computeLandmarksBallTree(X, eps, metric, leafSize)
 
     elif method == "faiss":
-        return _computeLandmarksFaiss(X, eps)
+        return _computeLandmarksFAISS(X, eps)
 
     else:
         raise ValueError("method must be 'ballTree' or 'faiss'.")
 
 
-def _computeLandmarksBallTree(X, eps, metric):
+def _computeLandmarksBallTree(X, eps, metric, leafSize):
     """
     Internal helper: compute landmarks using scikit-learn BallTree.
     """
@@ -76,7 +83,7 @@ def _computeLandmarksBallTree(X, eps, metric):
         raise ImportError("scikit-learn is required for BallTree method.")
 
     n = X.shape[0]
-    tree = BallTree(X, metric=metric)
+    tree = BallTree(X, metric=metric, leaf_size=leafSize)
 
     uncovered = np.ones(n, dtype=bool)
     landmarks, cover = [], []
@@ -91,7 +98,7 @@ def _computeLandmarksBallTree(X, eps, metric):
     return landmarks, cover
 
 
-def _computeLandmarksFaiss(X, eps):
+def _computeLandmarksFAISS(X, eps):
     """
     Internal helper: compute landmarks using FAISS.
     """
@@ -246,3 +253,331 @@ def buildMapper(cover):
 # =====================================================
 # Ball Mapper Coloring
 # =====================================================
+
+
+def colorByFunction(X, cover, func=np.mean):
+    """
+    Color Ball Mapper nodes using a function applied to covered points.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Data array (n_samples, n_features) or scalar values (n_samples,).
+    cover : list[np.ndarray]
+        Cover sets from landmarks.
+    func : callable, default=np.mean
+        Function applied to X[cover[i]].
+
+    Returns
+    -------
+    colors : np.ndarray
+        One value per landmark (node).
+    """
+    colors = np.zeros(len(cover))
+
+    for i, pts in enumerate(cover):
+        if len(pts) > 0:
+            colors[i] = func(X[pts])
+        else:
+            colors[i] = np.nan
+
+    return colors
+
+
+from collections import Counter
+
+
+def colorByMode(y, cover):
+    """
+    Assign each ball the most frequent label among covered points.
+    """
+    colors = np.zeros(len(cover), dtype=int)
+
+    for i, pts in enumerate(cover):
+        if len(pts) > 0:
+            colors[i] = Counter(y[pts]).most_common(1)[0][0]
+        else:
+            colors[i] = -1
+
+    return colors
+
+
+def colorByEntropy(y, cover):
+    """
+    Color balls by label entropy (heterogeneity).
+    """
+
+    def entropy(labels):
+        _, counts = np.unique(labels, return_counts=True)
+        p = counts / counts.sum()
+        return -np.sum(p * np.log2(p + 1e-12))
+
+    colors = np.zeros(len(cover))
+
+    for i, pts in enumerate(cover):
+        if len(pts) > 0:
+            colors[i] = entropy(y[pts])
+        else:
+            colors[i] = 0.0
+
+    return colors
+
+
+def colorBySize(cover):
+    """
+    Color balls by number of covered points.
+    """
+    return np.array([len(c) for c in cover])
+
+
+def colorByDensity(cover):
+    sizes = np.array([len(c) for c in cover])
+    return sizes / sizes.max()
+
+
+# =====================================================
+# Ball Mapper with Colors
+# =====================================================
+
+
+def drawBallMapper(
+    G,
+    colors=None,
+    sizes=None,
+    layout="spring",
+    cmap="viridis",
+    with_labels=True,
+    node_scale=300,
+    ax=None,
+):
+    """
+    Draw a Ball Mapper graph.
+
+    Parameters
+    ----------
+    G : networkx.Graph
+    colors : array-like or None
+        Optional node colors.
+    sizes : array-like or None
+        Optional node sizes.
+    layout : str
+    cmap : str
+    with_labels : bool
+    node_scale : float
+    ax : matplotlib.axes.Axes or None
+
+    Returns
+    -------
+    pos : dict
+    nodes : matplotlib.collections.PathCollection
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+    # Layout
+    if layout == "spring":
+        pos = nx.spring_layout(G, seed=42)
+    elif layout == "kamada_kawai":
+        pos = nx.kamada_kawai_layout(G)
+    elif layout == "spectral":
+        pos = nx.spectral_layout(G)
+    else:
+        raise ValueError("Unknown layout")
+
+    # Sizes
+    if sizes is None:
+        sizes = np.ones(len(G))
+    sizes = node_scale * (np.asarray(sizes) / np.max(sizes))
+
+    # Colors
+    if colors is None:
+        node_kwargs = dict(node_color="lightgray")
+    else:
+        node_kwargs = dict(node_color=colors, cmap=cmap)
+
+    nodes = nx.draw_networkx_nodes(
+        G,
+        pos,
+        node_size=sizes,
+        ax=ax,
+        **node_kwargs,
+    )
+
+    nx.draw_networkx_edges(G, pos, alpha=0.5, ax=ax)
+
+    if with_labels:
+        nx.draw_networkx_labels(G, pos, font_size=9, ax=ax)
+
+    ax.set_axis_off()
+    return pos, nodes
+
+
+def addColorbar(nodes, ax, label=None):
+    """
+    Add a colorbar if node colors are present.
+    """
+    if not hasattr(nodes, "cmap") or nodes.get_array() is None:
+        return  # No colors → no colorbar
+
+    sm = plt.cm.ScalarMappable(cmap=nodes.cmap, norm=nodes.norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax)
+    if label:
+        cbar.set_label(label)
+
+
+def computeEdgeOverlaps(cover, G):
+    """
+    Compute overlap size for each edge in the Ball Mapper graph.
+    """
+    overlaps = {}
+    for u, v in G.edges():
+        overlaps[(u, v)] = len(np.intersect1d(cover[u], cover[v]))
+    return overlaps
+
+
+def drawBallMapperPlotly(
+    G,
+    cover,
+    colorings=None,
+    sizes=None,
+    layout="spring",
+    node_scale=20,
+    export_html=None,
+):
+    """
+    Full-featured interactive Ball Mapper visualization.
+
+    Parameters
+    ----------
+    G : networkx.Graph
+    cover : list[np.ndarray]
+        Cover sets for hover info and overlap computation.
+    colorings : dict or None
+        {name: array-like} for dropdown coloring selection.
+    sizes : array-like or None
+        Node sizes (e.g., ball sizes).
+    layout : str
+    node_scale : float
+    export_html : str or None
+        Path to save interactive HTML.
+    """
+
+    # -----------------------
+    # Layout
+    # -----------------------
+    if layout == "spring":
+        pos = nx.spring_layout(G, seed=42)
+    elif layout == "kamada_kawai":
+        pos = nx.kamada_kawai_layout(G)
+    else:
+        raise ValueError("Unknown layout")
+
+    # -----------------------
+    # Edge overlaps → thickness
+    # -----------------------
+    overlaps = computeEdgeOverlaps(cover, G)
+    max_overlap = max(overlaps.values()) if overlaps else 1
+
+    edge_traces = []
+    for (u, v), w in overlaps.items():
+        edge_traces.append(
+            go.Scatter(
+                x=[pos[u][0], pos[v][0]],
+                y=[pos[u][1], pos[v][1]],
+                mode="lines",
+                line=dict(width=1 + 4 * w / max_overlap, color="gray"),
+                hoverinfo="none",
+                showlegend=False,
+            )
+        )
+
+    # -----------------------
+    # Node sizes
+    # -----------------------
+    if sizes is None:
+        sizes = np.array([len(c) for c in cover])
+    sizes = node_scale * sizes / sizes.max()
+
+    # -----------------------
+    # Hover text
+    # -----------------------
+    hover_text = [f"Ball {i}<br>Points: {len(cover[i])}" for i in range(len(cover))]
+
+    node_x = [pos[i][0] for i in G.nodes()]
+    node_y = [pos[i][1] for i in G.nodes()]
+
+    # -----------------------
+    # Colorings
+    # -----------------------
+    if colorings is None:
+        colorings = {"None": None}
+
+    traces = []
+    buttons = []
+
+    for i, (name, values) in enumerate(colorings.items()):
+        marker = dict(
+            size=sizes,
+            line=dict(width=1, color="black"),
+        )
+
+        if values is None:
+            marker["color"] = "lightgray"
+            marker["showscale"] = False
+        else:
+            marker["color"] = values
+            marker["colorscale"] = "Viridis"
+            marker["showscale"] = True
+            marker["colorbar"] = dict(title=name)
+
+        trace = go.Scatter(
+            x=node_x,
+            y=node_y,
+            mode="markers",
+            marker=marker,
+            hoverinfo="text",
+            text=hover_text,
+            visible=(i == 0),
+            showlegend=False,
+        )
+
+        traces.append(trace)
+
+        buttons.append(
+            dict(
+                label=name,
+                method="update",
+                args=[
+                    {
+                        "visible": [True] * len(edge_traces)
+                        + [j == i for j in range(len(traces))]
+                    },
+                ],
+            )
+        )
+
+    # -----------------------
+    # Figure
+    # -----------------------
+    fig = go.Figure(
+        data=edge_traces + traces,
+        layout=go.Layout(
+            updatemenus=[
+                dict(
+                    buttons=buttons,
+                    direction="down",
+                    x=0.02,
+                    y=0.98,
+                )
+            ],
+            hovermode="closest",
+            margin=dict(l=20, r=20, t=20, b=20),
+            showlegend=False,
+        ),
+    )
+
+    if export_html:
+        fig.write_html(export_html)
+
+    fig.show()
