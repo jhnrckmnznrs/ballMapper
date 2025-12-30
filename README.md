@@ -16,6 +16,7 @@ import numpy as np
 # Generate sample data
 np.random.seed(42)
 X = np.random.rand(500, 2)   # (n_samples, n_features)
+```
 
 ---
 
@@ -34,6 +35,7 @@ landmarks, cover = computeLandmarks(
     eps=eps,
     method="ballTree",   # or "faiss" if FAISS is installed
 )
+```
 
 #### Farthest Point Sampling (Ball Tree)
 
@@ -46,6 +48,7 @@ landmarks, cover = computeLandmarkFPS(
     start_index=None,    # deterministic default
     use_faiss=False
 )
+```
 
 ---
 
@@ -55,3 +58,4 @@ landmarks, cover = computeLandmarkFPS(
 from ballMapper import buildMapper
 
 G = buildMapper(cover)
+```
