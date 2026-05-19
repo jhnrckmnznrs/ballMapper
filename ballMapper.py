@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import networkx as nx
 import numpy as np
@@ -15,6 +15,9 @@ try:
 except ImportError:
     faiss = None
 
+from typing import List, Literal, Tuple
+
+import matplotlib.pyplot as plt
 
 # =====================================================
 # Landmark Computation
@@ -124,7 +127,7 @@ def _computeLandmarksFAISS(X, eps):
 
 
 # Include farthest point sampling
-def computeLandmarkFPS(X, eps, start_index=None, use_faiss=False):
+def computeLandmarksFPS(X, eps, start_index=None, use_faiss=True):
     """
     Deterministic farthest point sampling AND epsilon-ball cover.
 
@@ -146,10 +149,8 @@ def computeLandmarkFPS(X, eps, start_index=None, use_faiss=False):
         List where cover[i] contains indices of all points within eps of landmarks[i].
     """
 
-    n = X.shape[0]
-
     # --------------------------------------------------------------
-    # 1) FPS landmark selection (same optimized algorithm as before)
+    # 1) FPS landmark selection
     # --------------------------------------------------------------
 
     if start_index is None:
@@ -196,7 +197,7 @@ def computeLandmarkFPS(X, eps, start_index=None, use_faiss=False):
         index.add(X32)
 
         for idx in landmarks:
-            D, I = index.range_search(X32[idx].reshape(1, -1), eps2)
+            D, _, I = index.range_search(X32[idx].reshape(1, -1), eps2)
             cover.append(I[0])
 
     return landmarks, cover
@@ -282,9 +283,6 @@ def colorByFunction(X, cover, func=np.mean):
             colors[i] = np.nan
 
     return colors
-
-
-from collections import Counter
 
 
 def colorByMode(y, cover):
