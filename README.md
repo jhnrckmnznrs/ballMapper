@@ -4,7 +4,7 @@ This is an alternative Ball Mapper Python implementation that uses the Ball Tree
 
 ## Example Usage
 
-This example demonstrates how to build and visualize a **Ball Mapper graph** from a point cloud.
+This example demonstrates how to build a **Ball Mapper graph** from a point cloud.
 
 ---
 
