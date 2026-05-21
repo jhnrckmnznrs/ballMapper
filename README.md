@@ -879,7 +879,7 @@ MIT License
 
 ## Citation
 
-If you use this package in academic work, please cite the original Ball Mapper method and this repository.
+Please cite the original Ball Mapper paper.
 
 ---
 
@@ -889,7 +889,6 @@ Contributions are welcome.
 
 Suggested improvements include:
 
-- Additional distance metrics
 - More visualization options
 - Benchmark examples
 - Unit tests
