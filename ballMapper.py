@@ -68,14 +68,20 @@ def computeLandmarks(
     """
     method = method.lower()
 
-    if method == "balltree" or method == "ballTree".lower():
+    if method == "balltree":
         return _computeLandmarksBallTree(X, eps, metric, leafSize)
 
-    elif method == "faiss":
-        return _computeLandmarksFAISS(X, eps)
+    elif method == "faiss" and metric == "euclidean":
+        return _computeLandmarksEuclideanFAISS(X, eps)
+
+    elif method == "faiss" and metric == "cosine":
+        return _computeLandmarksCosineFAISS(X, eps)
 
     else:
-        raise ValueError("method must be 'ballTree' or 'faiss'.")
+        raise ValueError(
+            "Method must be 'ballTree' or 'faiss'. "
+            "For 'faiss', metric must be 'euclidean' or 'cosine'."
+        )
 
 
 def _computeLandmarksBallTree(X, eps, metric, leafSize):
@@ -101,7 +107,7 @@ def _computeLandmarksBallTree(X, eps, metric, leafSize):
     return landmarks, cover
 
 
-def _computeLandmarksFAISS(X, eps):
+def _computeLandmarksEuclideanFAISS(X, eps):
     """
     Internal helper: compute landmarks using FAISS.
     """
@@ -126,8 +132,43 @@ def _computeLandmarksFAISS(X, eps):
     return landmarks, cover
 
 
+def _computeLandmarksCosineFAISS(X, eps):
+    """
+    Internal helper: compute landmarks using FAISS.
+    """
+    if faiss is None:
+        raise ImportError("FAISS is required for method='faiss'.")
+
+    points = X.astype(np.float32)
+    faiss.normalize_L2(points)
+
+    d = points.shape[1]
+    index = faiss.IndexFlatIP(d)
+    index.add(points)
+
+    covered = np.zeros(len(points), dtype=bool)
+    landmarks, cover = [], []
+
+    for i in range(len(points)):
+        if not covered[i]:
+            landmarks.append(i)
+            lims, _, I = index.range_search(points[i].reshape(1, -1), 1 - eps)
+            pts = I[lims[0] : lims[1]]
+            cover.append(pts)
+            covered[pts] = True
+
+    return landmarks, cover
+
+
 # Include farthest point sampling
-def computeLandmarksFPS(X, eps, start_index=None, use_faiss=True):
+def computeLandmarksFPS(
+    X: np.ndarray,
+    eps: float,
+    start_index: int | None = None,
+    method: Literal["ballTree", "faiss"] = "ballTree",
+    metric: str = "euclidean",
+    leafSize: int = 40,
+) -> Tuple[List[int], List[np.ndarray]]:
     """
     Deterministic farthest point sampling AND epsilon-ball cover.
 
@@ -149,10 +190,12 @@ def computeLandmarksFPS(X, eps, start_index=None, use_faiss=True):
         List where cover[i] contains indices of all points within eps of landmarks[i].
     """
 
-    # --------------------------------------------------------------
-    # 1) FPS landmark selection
-    # --------------------------------------------------------------
+    if X.shape[0] == 0:
+        return [], []
 
+    # --------------------------------------------------
+    # 1) FPS landmark selection
+    # --------------------------------------------------
     if start_index is None:
         start_index = np.lexsort(X.T)[0]
 
@@ -162,11 +205,11 @@ def computeLandmarksFPS(X, eps, start_index=None, use_faiss=True):
         return norms + norms[i] - 2 * (X @ X[i])
 
     dists = sqdist_to(start_index)
-    landmarks = [start_index]
+    landmarks = [int(start_index)]
     eps2 = eps * eps
 
     while True:
-        next_index = np.argmax(dists)
+        next_index = int(np.argmax(dists))
         max_dist = dists[next_index]
 
         if max_dist <= eps2:
@@ -175,32 +218,113 @@ def computeLandmarksFPS(X, eps, start_index=None, use_faiss=True):
         landmarks.append(next_index)
         dists = np.minimum(dists, sqdist_to(next_index))
 
-    # --------------------------------------------------------------
-    # 2) Build cover (epsilon neighborhoods) using BallTree or FAISS
-    # --------------------------------------------------------------
+    # --------------------------------------------------
+    # 2) Cover construction
+    # --------------------------------------------------
+    method = method.lower()
 
-    cover = []
+    if method == "balltree":
+        cover = _buildCoverBallTree(X, landmarks, eps, metric, leafSize)
 
-    if not use_faiss:
-        # --- BallTree path (recommended for most cases) ---
-        tree = BallTree(X)
-        for idx in landmarks:
-            inds = tree.query_radius(X[idx].reshape(1, -1), r=eps)[0]
-            cover.append(inds)
+    elif method == "faiss" and metric == "euclidean":
+        cover = _buildCoverEuclideanFAISS(X, landmarks, eps)
+
+    elif method == "faiss" and metric == "cosine":
+        cover = _buildCoverCosineFAISS(X, landmarks, eps)
 
     else:
-        # --- FAISS path (GPU or CPU exact L2) ---
-        import faiss
-
-        X32 = X.astype(np.float32)
-        index = faiss.IndexFlatL2(X.shape[1])
-        index.add(X32)
-
-        for idx in landmarks:
-            D, _, I = index.range_search(X32[idx].reshape(1, -1), eps2)
-            cover.append(I[0])
+        raise ValueError(
+            "Method must be 'ballTree' or 'faiss'. "
+            "For 'faiss', metric must be 'euclidean' or 'cosine'."
+        )
 
     return landmarks, cover
+
+
+# =====================================================
+# Reusable cover builders
+# =====================================================
+
+
+def _buildCoverBallTree(
+    X: np.ndarray,
+    landmarks: List[int],
+    eps: float,
+    metric: str = "euclidean",
+    leafSize: int = 40,
+) -> List[np.ndarray]:
+    """
+    Build epsilon-ball covers for a fixed list of landmarks using BallTree.
+    """
+    if BallTree is None:
+        raise ImportError("scikit-learn is required for BallTree method.")
+
+    tree = BallTree(X, metric=metric, leaf_size=leafSize)
+
+    cover = []
+    for i in landmarks:
+        idx = tree.query_radius(X[i : i + 1], eps)[0]
+        cover.append(idx)
+
+    return cover
+
+
+def _buildCoverEuclideanFAISS(
+    X: np.ndarray,
+    landmarks: List[int],
+    eps: float,
+) -> List[np.ndarray]:
+    """
+    Build epsilon-ball covers for a fixed list of landmarks using FAISS L2 search.
+    """
+    if faiss is None:
+        raise ImportError("FAISS is required for method='faiss'.")
+
+    points = X.astype(np.float32)
+    index = faiss.IndexFlatL2(points.shape[1])
+    index.add(points)
+
+    eps2 = eps * eps
+    cover = []
+
+    for i in landmarks:
+        lims, _, I = index.range_search(points[i].reshape(1, -1), eps2)
+        pts = I[lims[0] : lims[1]]
+        cover.append(pts)
+
+    return cover
+
+
+def _buildCoverCosineFAISS(
+    X: np.ndarray,
+    landmarks: List[int],
+    eps: float,
+) -> List[np.ndarray]:
+    """
+    Build epsilon-ball covers for a fixed list of landmarks using FAISS cosine search.
+
+    Assumes eps is a cosine-distance radius, so neighbors satisfy:
+
+        cosine_similarity >= 1 - eps
+    """
+    if faiss is None:
+        raise ImportError("FAISS is required for method='faiss'.")
+
+    points = X.astype(np.float32)
+    faiss.normalize_L2(points)
+
+    index = faiss.IndexFlatIP(points.shape[1])
+    index.add(points)
+
+    radius = 1.0 - eps
+    cover = []
+
+    for i in landmarks:
+        lims, _, I = index.range_search(points[i].reshape(1, -1), radius)
+        pts = I[lims[0] : lims[1]]
+        cover.append(pts)
+
+    return cover
 
 
 # =====================================================
